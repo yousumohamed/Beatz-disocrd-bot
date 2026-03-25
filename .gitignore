@@ -2,27 +2,4 @@ node_modules/
 
 
 
-# Logs
-*.log
-bot_logs.txt
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-
-# Runtime files and temporary media
-*.tmp
-*.temp
-*.webm
-*.mp3
-*.wav
-
-# Local binaries generated or stored in project root
-yt-dlp
-yt-dlp.exe
 
