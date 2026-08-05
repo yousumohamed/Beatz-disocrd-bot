@@ -40,6 +40,26 @@ CLIENT_ID=your_discord_application_client_id
 npm start
 ```
 
+## Deploy on Render
+
+Create a **Web Service** (not a Background Worker), set the environment
+variables `DISCORD_TOKEN` and `CLIENT_ID`, then use:
+
+- Build command: `npm ci`
+- Start command: `npm start`
+
+Render assigns `PORT` automatically. The bot listens on that port and exposes
+`GET /health`, for example:
+
+```text
+https://your-service-name.onrender.com/health
+```
+
+The response includes `uptimeSeconds` and a readable `uptime` value. Configure
+your external cron/ping service to request that URL. Note that Render free web
+services can still spin down; use a paid always-on instance if you need a
+reliable 24/7 Discord voice bot.
+
 ## Scripts
 
 - `npm start` - Starts the bot using `node index.js`.

@@ -6,8 +6,40 @@ const dns = require('node:dns');
 dns.setDefaultResultOrder('ipv4first');
 
 const path = require('path');
+const http = require('node:http');
 // Use ffmpeg-static which works on both Windows AND Linux automatically
 process.env.FFMPEG_PATH = require('ffmpeg-static');
+
+// Render requires a web service to listen on its assigned port. This endpoint
+// can also be called by an external cron job to monitor the process.
+const startedAt = Date.now();
+const port = Number(process.env.PORT) || 3000;
+
+const healthServer = http.createServer((req, res) => {
+    const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+    if (req.method === 'GET' && requestUrl.pathname === '/health') {
+        const uptimeSeconds = Math.floor((Date.now() - startedAt) / 1000);
+        res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+        });
+        res.end(JSON.stringify({
+            status: 'ok',
+            uptimeSeconds,
+            uptime: `${Math.floor(uptimeSeconds / 3600)}h ${Math.floor((uptimeSeconds % 3600) / 60)}m ${uptimeSeconds % 60}s`,
+            timestamp: new Date().toISOString(),
+        }));
+        return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'Not found. Use GET /health.' }));
+});
+
+healthServer.listen(port, '0.0.0.0', () => {
+    console.log(`[Health] Listening on port ${port} at /health`);
+});
 
 const {
     Client,
