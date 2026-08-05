@@ -133,7 +133,7 @@ function getOrCreatePlayer(guildId, connection, channel) {
     }
 
     const player = createAudioPlayer();
-    sessions.set(guildId, { player, connection, channel });
+    sessions.set(guildId, { player, connection, channel, hasPlayed: false, playbackError: null });
     connection.subscribe(player);
 
     // Auto-unpause silently — logging here causes console spam → Wispbyte Exit 130
@@ -141,9 +141,16 @@ function getOrCreatePlayer(guildId, connection, channel) {
         setTimeout(() => player.unpause(), 500);
     });
 
+    player.on(AudioPlayerStatus.Playing, () => {
+        const session = sessions.get(guildId);
+        if (session) session.hasPlayed = true;
+    });
+
     player.on(AudioPlayerStatus.Idle, async () => {
         const session = sessions.get(guildId);
-        if (!session) return;
+        // Do not call a stream that failed before producing audio "finished".
+        if (!session || !session.hasPlayed) return;
+        session.hasPlayed = false;
 
         // Stay in voice channel — send a new Play Music button so user can queue the next song
         const playRow = new ActionRowBuilder().addComponents(
@@ -162,7 +169,11 @@ function getOrCreatePlayer(guildId, connection, channel) {
         } catch (e) { /* silent */ }
     });
 
-    player.on('error', () => { /* silent */ });
+    player.on('error', error => {
+        const session = sessions.get(guildId);
+        if (session) session.playbackError = error;
+        console.error('[Audio] Player error:', error.message);
+    });
 
     return player;
 }
@@ -317,6 +328,11 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
                 }
 
+                // On cloud hosts the UDP voice handshake can take a moment.
+                // Starting the stream before this is ready can immediately idle
+                // the player and make every song appear to finish instantly.
+                await entersState(conn, VoiceConnectionStatus.Ready, 20_000);
+
                 // --- Fast URL resolution ---
                 // For direct YouTube URLs: skip play.validate() entirely (saves ~1-2s network round trip)
                 // For search queries / playlists: use play-dl to resolve to a YouTube URL first
@@ -387,10 +403,14 @@ client.on(Events.InteractionCreate, async interaction => {
                         targetUrl
                     ]);
 
-                    // Completely silent — no output whatsoever during playback
-                    ytDlpProc.stderr.on('data', () => {});
-                    ytDlpProc.on('error', () => {});
-                    ytDlpProc.on('close', () => {});
+                    let ytDlpError = '';
+                    ytDlpProc.stderr.on('data', chunk => {
+                        // Keep the useful tail for Render logs without flooding them.
+                        ytDlpError = (ytDlpError + chunk.toString()).slice(-2_000);
+                    });
+                    ytDlpProc.on('error', error => {
+                        console.error('[yt-dlp] Could not start:', error.message);
+                    });
 
                     // Feed WebM Opus directly to Discord's native demuxer — no ffmpeg needed!
                     const resource = createAudioResource(ytDlpProc.stdout, {
@@ -399,8 +419,17 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
 
                     const player = getOrCreatePlayer(interaction.guildId, conn, interaction.channel);
+                    const session = sessions.get(interaction.guildId);
+                    session.hasPlayed = false;
+                    session.playbackError = null;
                     player.play(resource);
 
+                    try {
+                        await entersState(player, AudioPlayerStatus.Playing, 20_000);
+                    } catch (error) {
+                        const details = ytDlpError.trim() || session.playbackError?.message || error.message;
+                        throw new Error(`Playback did not start: ${details}`);
+                    }
 
 
                     const controlsRow = new ActionRowBuilder().addComponents(
@@ -416,11 +445,14 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 } catch (error) {
                     try { if (ytDlpProc) ytDlpProc.kill(); } catch (_) {}
+                    console.error('[Playback] Failed:', error.message);
                     throw error;
                 }
 
             } catch (error) {
-                await interaction.editReply('❌ Could not load that YouTube URL. It may be age-restricted, private, or unavailable.');            }
+                console.error('[Playback] Request failed:', error.message);
+                await interaction.editReply('❌ Could not start that track. Check that the URL is public, then try again.');
+            }
         }
     } catch (err) {
         console.error('[Interaction General Error]', err);
